@@ -1,0 +1,123 @@
+import hashlib
+
+MOD = 1000003  # просте число для модульної арифметики (демонстраційно)
+
+def sha256_int(data: bytes) -> int:
+    return int.from_bytes(hashlib.sha256(data).digest(), 'big')
+
+def small_hash_from_personal(personal_str: str, extra: str = "") -> int:
+    """Генеруємо спрощений 'приватний' ключ на основі персональних даних + додаткової фрази.
+       Повертаємо значення в діапазоні 0..MOD-1 (щоб працювала спрощена математика)."""
+    h = hashlib.sha256((personal_str + extra).encode('utf-8')).hexdigest()
+    return int(h, 16) % MOD
+
+def generate_keys(personal_str: str, extra_phrase: str = "supersecret"):
+    """
+    Генерує приватний та публічний ключі.
+    Приватний ключ (sp_priv) — small hash від персональних даних + extra_phrase (mod MOD).
+    Публічний ключ (sp_pub) = (sp_priv * 7) mod MOD — спрощена залежність.
+    """
+    sp_priv = small_hash_from_personal(personal_str, extra_phrase)
+    sp_pub = (sp_priv * 7) % MOD
+    return sp_priv, sp_pub
+
+def sign_document(document_bytes: bytes, sp_priv: int):
+    """
+    "Підпис" документа: беремо SHA-256 хеш документа, зводимо його до small (mod MOD)
+    і застосовуємо XOR з приватним ключем (спрощено).
+    Повертаємо tuple(signature_int, doc_hash_small).
+    """
+    doc_hash_small = sha256_int(document_bytes) % MOD
+    signature = doc_hash_small ^ sp_priv
+    return signature, doc_hash_small
+
+def verify_signature(document_bytes: bytes, signature: int, sp_pub: int):
+    """
+    Перевірка підпису: за публічним ключем відновлюємо приватний ключ (спрощено) і "розшифровуємо"
+    підпис: recovered_hash = signature XOR recovered_priv. Порівнюємо з хешем поточного документу.
+    Для відновлення приватного ключа використовуємо мультиплікативний обернений елемент до 7 (inv7),
+    оскільки sp_pub = sp_priv * 7 (mod MOD) => sp_priv = sp_pub * inv7 (mod MOD).
+    """
+    # обчислимо inv7: 7^(MOD-2) mod MOD (Fermat, бо MOD просте)
+    inv7 = pow(7, MOD-2, MOD)
+    recovered_priv = (sp_pub * inv7) % MOD
+    recovered_hash = signature ^ recovered_priv
+    current_hash = sha256_int(document_bytes) % MOD
+    valid = (recovered_hash == current_hash)
+    return {
+        "valid": valid,
+        "recovered_priv": recovered_priv,
+        "recovered_hash": recovered_hash,
+        "current_hash": current_hash
+    }
+
+# ---------------------- Демонстрація ----------------------
+personal = "Тимофiй Ляшенко"  # персональні дані, які ви навели
+extra_phrase = "student_demo_phrase"  # додаткова "секретна" фраза для генерації приватного ключа
+
+# документ (демонстраційно) — замість файлу використовуємо байти тексту; у реалі можна читати файл
+document_text = "Резюме Тимофія Ляшенка\nДосвід: студент, проєкти з безпеки та шифрування.\nКонтакти: timofii@example.com"
+document_bytes = document_text.encode('utf-8')
+
+# 1. Генерація ключів
+sp_priv, sp_pub = generate_keys(personal, extra_phrase)
+
+# 2. Підпис документа приватним ключем
+signature, doc_hash_small = sign_document(document_bytes, sp_priv)
+
+# 3. Перевірка — коректний документ
+verification = verify_signature(document_bytes, signature, sp_pub)
+
+# 4. Демонстрація підробки: змінюємо документ (наприклад, правка у тексті)
+tampered_text = document_text.replace("студент", "сфальсифіковано")  # невелика зміна
+tampered_bytes = tampered_text.encode('utf-8')
+verification_tampered = verify_signature(tampered_bytes, signature, sp_pub)
+
+# 5. Демонстрація підробки підпису: змінимо підпис на випадкове число
+fake_signature = (signature + 12345) % MOD  # спрощено
+verification_fake_sig = verify_signature(document_bytes, fake_signature, sp_pub)
+
+# Виведемо все у зручному вигляді
+print("=== СПРОЩЕНА СИСТЕМА ЦИФРОВИХ ПІДПИСІВ (ДЕМОНСТРАЦІЯ) ===\n")
+print("Персональні дані:", personal)
+print("Extra phrase (used in key derivation):", extra_phrase)
+print("\n-- Згенеровані ключі (спрощено) --")
+print("Приватний ключ (small, mod {}): {}".format(MOD, sp_priv))
+print("Публічний ключ (small, mod {}): {}".format(MOD, sp_pub))
+
+print("\n-- Документ та його хеш (малий, mod {}) --".format(MOD))
+print("Документ (перші 120 символів):", document_text[:120])
+print("doc_hash_small:", doc_hash_small)
+
+print("\n-- Підпис --")
+print("Signature (int):", signature)
+
+print("\n-- Перевірка справжнього документа з підписом --")
+print("Результат валідації:", "ПІДПИС ДІЙСНИЙ" if verification["valid"] else "ПІДРОБКА/ЗМІНА")
+print("Відновлений приватний ключ (з публічного):", verification["recovered_priv"])
+print("Відновлений хеш із підпису:", verification["recovered_hash"])
+print("Поточний хеш документа:", verification["current_hash"])
+
+print("\n-- Перевірка після зміни документа (tampering) --")
+print("Зміни в документі:", tampered_text[:120])
+print("Результат валідації:", "ПІДПИС ДІЙСНИЙ" if verification_tampered["valid"] else "ПІДРОБКА/ЗМІНА")
+print("Відновлений хеш із підпису:", verification_tampered["recovered_hash"])
+print("Поточний хеш зміненого документа:", verification_tampered["current_hash"])
+
+print("\n-- Перевірка з підробленим підписом (signature tampered) --")
+print("Fake signature value:", fake_signature)
+print("Результат валідації:", "ПІДПИС ДІЙСНИЙ" if verification_fake_sig["valid"] else "ПІДРОБКА/ЗМІНА")
+print("Відновлений хеш із підпису:", verification_fake_sig["recovered_hash"])
+print("Поточний хеш документа:", verification_fake_sig["current_hash"])
+
+# Повернемо словник з результатами для подальшого використання
+{
+  "personal": personal,
+  "sp_priv": sp_priv,
+  "sp_pub": sp_pub,
+  "doc_hash_small": doc_hash_small,
+  "signature": signature,
+  "verification": verification,
+  "verification_tampered": verification_tampered,
+  "verification_fake_sig": verification_fake_sig
+}
